@@ -1,0 +1,174 @@
+---
+title: "Bioirrigation fitting examples"
+author: "Emil De Borger"
+date: "11-6-2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load uranine model.
+install.packages("irrfit.tar", repos = NULL, type = "tar")
+require(irrfit)
+require(FME)
+source("./bioirrigation_fitting_functions.R")
+```
+
+# Looking at tracer timeseries
+
+Three examples of tracer data from measurements performed in the Dortsman intertidal area (Netherlands).
+
+### First, the data
+
+Uranine concentrations have been converted from FTU's (raw output of the sensor) to microgram/L using a concentration series performed 
+before the experiment to calibrate the sensors.
+The time is converted to hours, as that is how the model is set up.
+
+```{r, echo = FALSE}
+
+dortsman_data           <- read.table("./example_data/example_data_dortsman.csv", sep = ";", header = TRUE, dec = ".")
+colnames(dortsman_data) <- c("time", "August", "November", "July")
+
+cols <- gray.colors(3)
+plot(dortsman_data$time , dortsman_data$August   , lwd = 3, col = cols[1], type = "l", xlab = "Time (h)", ylab = "Concentration (microgram/L)", ylim = c(3, 11))
+lines(dortsman_data$time, dortsman_data$November , lwd = 3, col = cols[2])
+lines(dortsman_data$time, dortsman_data$July, lwd = 3, col = cols[3])
+legend("topright", c("August", "November", "July"), bty = "n", lty = 1, col = rev(gray.colors(3)), lwd = 3)
+
+```
+
+### Some corrections
+
+There are some spikes in the beginning of the data, and it's best to cut this off to improve the fitting procedure.
+The August data is fine, but in the September - November data some of the first observations are removed.
+First, the data are subdivided in individual measurements, with specific column names, so it can be recognized by the fitting procedure. "UrOw" stands for uranine in overlying water.
+
+```{r}
+
+August   <- data.frame("time" = dortsman_data$time, "UrOW" = dortsman_data$August   )
+November <- data.frame("time" = dortsman_data$time, "UrOW" = dortsman_data$November )
+July     <- data.frame("time" = dortsman_data$time, "UrOW" = dortsman_data$July)
+
+November <- November[-c(1:4),]
+November <- November[!(November$time >= 21.4),]
+July     <- July[-(1:4),]
+
+```
+
+Now check again:
+
+```{r}
+
+plot(August$time    , August$UrOW   , lwd = 3, col = 2, type = "l", xlab = "Time (h)", ylab = "Concentration (microgram/L)", ylim = c(3, 11))
+lines(November$time , November$UrOW , lwd = 3, col = 3)
+lines(July$time, July$UrOW, lwd = 3, col = 4)
+legend("topright", c("August", "November", "July"), bty = "n", lty = 1, col = 2:4, lwd = 3)
+
+```
+
+# Preparing parameters
+
+```{r}
+
+# There are three sets of parameters that are specified (in this case).
+# Base parameters that are the same in all months.
+sediment_parms <- c(kAds = 1, dens = 2.4952, porosity = 0.429, eqAds = .05, pumpSurfDepth = 0.001)
+
+# Parameters specific to each core
+August_specific   <- c(hOw = 12  , hSed = 18  , iniConcOW = 5.9293, area = 314.15)
+November_specific <- c(hOw = 13.5, hSed = 16.5, iniConcOW = 7.6626, area = 314.15)
+July_specific     <- c(hOw = 8.5 , hSed = 21.5, iniConcOW = 10.70263, area = 314.15)
+
+# Combining both
+parameters_August    <- c(August_specific  , sediment_parms) 
+parameters_November  <- c(November_specific, sediment_parms) 
+parameters_July      <- c(July_specific    , sediment_parms)
+
+# Initial starting parameters for parameters to fit
+fitp <- c(pumpSurfRate = 2, pumpSurfAtt = 1)
+
+```
+
+# First run of the model
+
+Without fitting. Now we see why further tuning of the irrigation parameters is necessary.
+
+```{r}
+
+out_August   <- run.Uranine(parms = c(parameters_August  , fitp), hours = 24)
+out_November <- run.Uranine(parms = c(parameters_November, fitp), hours = 24)
+out_July     <- run.Uranine(parms = c(parameters_July    , fitp), hours = 24)
+
+par(mfrow = c(1,1))
+plot(out_August, out_November, out_July, obs = list(August, November, July), col = 2:4, ylim = c(3, 11),
+     obspar = list(cex = 4, col = 2:4, pch = "."))
+
+```
+
+# Fitting
+
+* Please check the vignette of the package FME `citation("FME")` to learn more about the fitting procedure used here..
+
+```{r}
+
+Fit_August    <- modFit(f = URAcost, p = fitp, corepars = parameters_August, 
+                    measured.data = August, verbose = FALSE,
+                    lower=c(0.001, 0.001),
+                    upper=c(20, 10),
+                    method = "Pseudo",
+                    control = list(numiter = 5000))
+Fit_November  <- modFit(f = URAcost, p = fitp, corepars = parameters_November,
+                    measured.data = November, verbose = FALSE,
+                    lower=c(0.001, 0.001),
+                    upper=c(5, 10),
+                    method = "Pseudo",
+                    control = list(numiter = 10000))
+Fit_July     <- modFit(f = URAcost, p = fitp, corepars = parameters_July,
+                    measured.data = July, verbose = FALSE,
+                    lower=c(0.001, 0.001),
+                    upper=c(20, 10),
+                    method = "Pseudo",
+                    control = list(numiter = 10000))
+
+```
+
+# Plot the fitted output
+
+```{r}
+
+## First run the model with the fitted parameters as input.
+final_August   <- run.Uranine(parms = c(coef(Fit_August)  , parameters_August)   , hours = 24, times = seq(from = 0, to = 24, length.out = 288), rtol = 1e-8)
+final_November <- run.Uranine(parms = c(coef(Fit_November), parameters_November) , hours = 24, times = seq(from = 0, to = 24, length.out = 288), rtol = 1e-8)
+final_July     <- run.Uranine(parms = c(coef(Fit_July)    , parameters_July), hours = 24, times = seq(from = 0, to = 24, length.out = 288), rtol = 1e-8)
+
+plot(August, xlab ="time (hours)", ylab = "UrOW (ug/L)", ylim = c(2,8), xlim = c(0,20), main = "August", cex = 0.6, col = "grey")
+lines(out_August[,1], out_August[,2], lty=2)
+lines(final_August[,1], final_August[,2], col = 2, lwd = 1)
+legend("topright", legend = c("Measured data", "Initial run", "Fitted run"), lty = c(1, 2, 1), col = c("grey",1,2), lwd = c(3,1,1), bty = "n")
+
+plot(November, xlab ="time (hours)", ylab = "UrOW (ug/L)", ylim = c(0,10), xlim = c(0,25), main = "November", col = "grey")
+lines(out_November[,1], out_November[,2], lty=2)
+lines(final_November[,1], final_November[,2], col = 3, lwd = 1)
+legend("topright", legend = c("Measured data", "Initial run", "Fitted run"), lty = c(1, 2, 1), col = c("grey",1,3), lwd = c(3,1,1), bty = "n")
+
+plot(July, xlab ="time (hours)", ylab = "UrOW (ug/L)", ylim = c(6,11), xlim = c(0,20), main = "July", col = "grey")
+lines(out_July[,1]  , out_July[,2], lty=2)
+lines(final_July[,1], final_July[,2], col = 4, lwd = 1)
+legend("topright", legend = c("Measured data", "Initial run", "Fitted run"), lty = c(1, 2, 1), col = c("grey",1,4), lwd = c(3,1,1), bty = "n")
+
+```
+
+# The coefficients
+
+```{r}
+# August
+print(coef(Fit_August))
+
+# November
+print(coef(Fit_November))
+
+# September
+print(coef(Fit_July))
+
+```
